@@ -34,13 +34,32 @@ def _create_table(
     return table
 
 
-def _align_labels_and_tokens(tokens: tf.RaggedTensor, y):
+def _align_tokens_and_labels(tokens_labels: tuple):
+    tokens = tokens_labels[0]
+    labels = tokens_labels[1]
+
     tokens_word_id = tokens.nested_value_rowids()
-    y = tf.gather(y, tokens_word_id)
-    y = tf.squeeze(y, axis=0)
+    labels = tf.gather(labels, tokens_word_id)
+    labels = tf.squeeze(labels, axis=0)
     tokens = tokens.flat_values
-    y = tf.ensure_shape(y, tokens.shape)
-    return tokens, y
+    labels = tf.ensure_shape(labels, tokens.shape)
+    return tokens, labels
+
+
+def _batch_align_tokens_and_labels(tokens_labels: tuple):
+    tokens = tokens_labels[0]
+    labels = tokens_labels[1]
+
+    tokens, labels = tf.map_fn(
+        _align_tokens_and_labels,
+        (tokens, labels),
+        fn_output_signature=(
+            tf.RaggedTensorSpec(shape=[None], dtype=tokens.dtype),
+            tf.RaggedTensorSpec(shape=[None], dtype=labels.dtype),
+        ),
+    )
+
+    return tokens, labels
 
 
 def _pad_ragged_sequence(sequence, max_seq_length, pad_value=0):
@@ -282,12 +301,15 @@ class Tokenizer(PreprocessingLayer):
     def tokenize_words_with_align(self, x, y):
         self._validate_is_adapted()
         ndims_x = x.shape.ndims
-        if ndims_x == 1:
+        if ndims_x == 1 or ndims_x == 2:
             x = self._tokenizer.tokenize(x).merge_dims(-2, -1)
         else:
-            raise ValueError("Input must have rank 1, found rank {}.".format(ndims_x))
+            raise ValueError("Input must have rank 1 or 2, found rank {}.".format(ndims_x))
 
-        x, y = _align_labels_and_tokens(x, y)
+        if ndims_x == 1:
+            x, y = _align_tokens_and_labels((x, y))
+        else:
+            x, y = _batch_align_tokens_and_labels((x, y))
 
         return x, y
 
